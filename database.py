@@ -4,7 +4,9 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-DB_NAME = os.getenv("DB_NAME", "movies.db")
+# Render.com da /data papkasiga (Persistent Disk) saqlash, lokal da oddiy fayl
+_default_db = os.path.join("/data", "movies.db") if os.path.isdir("/data") else "movies.db"
+DB_NAME = os.getenv("DB_NAME", _default_db)
 
 
 # ─────────────────────── JADVALLARNI YARATISH ───────────────────────
