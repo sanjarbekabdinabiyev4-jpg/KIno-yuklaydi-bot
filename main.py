@@ -252,7 +252,8 @@ def episodes_paginated_kb(
 # ─────────────────────── FOYDALANUVCHI: /start, /myid, MENYU ───────────────────────
 
 @dp.message(CommandStart())
-async def cmd_start(message: Message) -> None:
+async def cmd_start(message: Message, state: FSMContext) -> None:
+    await state.clear()
     user = message.from_user
     await db.add_or_update_user(user.id, user.full_name, user.username)
     is_admin = user.id in ADMIN_IDS
@@ -294,7 +295,8 @@ async def cb_main_menu(call: CallbackQuery, state: FSMContext) -> None:
 
 
 @dp.callback_query(F.data == "search_by_code")
-async def cb_search_by_code(call: CallbackQuery) -> None:
+async def cb_search_by_code(call: CallbackQuery, state: FSMContext) -> None:
+    await state.clear()
     await call.message.edit_text(
         "🔢 <b>Kod bo'yicha qidiruv</b>\n\n"
         "Kino yoki serial kodini (raqamni) yuboring.\n"
