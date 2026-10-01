@@ -401,12 +401,15 @@ async def cb_series_info(call: CallbackQuery) -> None:
     )
     markup = episodes_paginated_kb(code, episodes, page=0, per_page=10)
     if series.get("poster_file_id"):
-        await call.message.delete()
-        await call.message.answer_photo(
-            photo=series["poster_file_id"],
-            caption=text,
-            reply_markup=markup,
-        )
+        try:
+            await call.message.delete()
+            await call.message.answer_photo(
+                photo=series["poster_file_id"],
+                caption=text,
+                reply_markup=markup,
+            )
+        except Exception:
+            await call.message.edit_text(text, reply_markup=markup)
     else:
         await call.message.edit_text(text, reply_markup=markup)
 
@@ -431,11 +434,14 @@ async def handle_code(message: Message) -> None:
             )
             markup = episodes_paginated_kb(code, episodes, page=0, per_page=10)
             if series.get("poster_file_id"):
-                await message.answer_photo(
-                    photo=series["poster_file_id"],
-                    caption=text,
-                    reply_markup=markup,
-                )
+                try:
+                    await message.answer_photo(
+                        photo=series["poster_file_id"],
+                        caption=text,
+                        reply_markup=markup,
+                    )
+                except Exception:
+                    await message.answer(text, reply_markup=markup)
             else:
                 await message.answer(text, reply_markup=markup)
         else:
@@ -457,13 +463,26 @@ async def handle_code(message: Message) -> None:
             f"🎭 <b>Janr:</b> {movie['janri']}\n"
             f"🌍 <b>Til:</b> {movie['tili']}\n"
             f"📺 <b>Sifat:</b> {movie['sifat']}\n\n"
-            f"📥 <i>Yuklab olish uchun videoni saqlang.</i>"
+            f"🔒 <i>Ushbu video himoyalangan (uzatish cheklangan).</i>"
         )
-        await message.answer_video(
-            video=movie["video_file_id"],
-            caption=caption,
-            reply_markup=back_to_menu_kb(),
-        )
+        try:
+            await message.answer_video(
+                video=movie["video_file_id"],
+                caption=caption,
+                reply_markup=back_to_menu_kb(),
+                protect_content=True,
+            )
+        except Exception:
+            try:
+                await message.answer_document(
+                    document=movie["video_file_id"],
+                    caption=caption,
+                    reply_markup=back_to_menu_kb(),
+                    protect_content=True,
+                )
+            except Exception as e:
+                logger.error(f"Kino yuborishda xatolik: {e}")
+                await message.answer("❌ Videoni yuklashda xatolik yuz berdi!", reply_markup=back_to_menu_kb())
         return
 
     # 3. Topilmadi
@@ -518,7 +537,15 @@ async def cb_send_episode(call: CallbackQuery) -> None:
         f"🔢 Serial kodi: <code>{series_code}</code>"
     )
 
-    await call.message.answer_video(video=file_id, caption=caption)
+    try:
+        await call.message.answer_video(video=file_id, caption=caption, protect_content=True)
+    except Exception:
+        try:
+            await call.message.answer_document(document=file_id, caption=caption, protect_content=True)
+        except Exception as e:
+            logger.error(f"Qism yuborishda xatolik: {e}")
+            await call.answer("❌ Ushbu qism videosini yuborib bo'lmadi!", show_alert=True)
+            return
     await call.answer()
 
 
@@ -534,9 +561,18 @@ async def cb_get_movie(call: CallbackQuery) -> None:
         f"🎬 <b>{movie['nomi']}</b>\n\n"
         f"🔢 <b>Kod:</b> <code>{movie['kino_kodi']}</code>\n"
         f"🎭 <b>Janr:</b> {movie['janri']}\n"
-        f"📺 <b>Sifat:</b> {movie['sifat']}"
+        f"📺 <b>Sifat:</b> {movie['sifat']}\n\n"
+        f"🔒 <i>Ushbu video himoyalangan (uzatish cheklangan).</i>"
     )
-    await call.message.answer_video(video=movie["video_file_id"], caption=caption)
+    try:
+        await call.message.answer_video(video=movie["video_file_id"], caption=caption, protect_content=True)
+    except Exception:
+        try:
+            await call.message.answer_document(document=movie["video_file_id"], caption=caption, protect_content=True)
+        except Exception as e:
+            logger.error(f"Kino yuborishda xatolik: {e}")
+            await call.answer("❌ Ushbu kinoni yuborib bo'lmadi!", show_alert=True)
+            return
     await call.answer()
 
 
