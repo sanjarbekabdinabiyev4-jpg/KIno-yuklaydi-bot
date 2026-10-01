@@ -2,6 +2,7 @@ import os
 import sys
 import logging
 import asyncio
+from aiohttp import web
 
 from dotenv import load_dotenv
 from aiogram import Bot, Dispatcher, F
@@ -1154,9 +1155,33 @@ async def cmd_cancel(message: Message, state: FSMContext) -> None:
 
 # ─────────────────────── ASOSIY FUNKSIYA ───────────────────────
 
+async def start_web_server() -> None:
+    """Render.com Web Service uchun fon rejimida kichik HTTP server ishga tushiradi."""
+    app = web.Application()
+
+    async def handle_ping(request: web.Request) -> web.Response:
+        return web.Response(text="Bot is running 24/7! 🚀", content_type="text/plain")
+
+    app.router.add_get("/", handle_ping)
+    app.router.add_get("/health", handle_ping)
+
+    port = int(os.getenv("PORT", "8080"))
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "0.0.0.0", port)
+    await site.start()
+    logger.info(f"Render Web Server ishga tushdi (port: {port})")
+
+
 async def main() -> None:
     await db.create_tables()
     logger.info("Malumotlar bazasi tayyor.")
+
+    # Render Web Service uchun port ochish
+    try:
+        await start_web_server()
+    except Exception as e:
+        logger.warning(f"Web serverni ishga tushirishda ogohlantirish: {e}")
 
     await bot.delete_webhook(drop_pending_updates=True)
     logger.info("Bot ishga tushdi! Seriallar va kinolar qidirishga tayyor.")

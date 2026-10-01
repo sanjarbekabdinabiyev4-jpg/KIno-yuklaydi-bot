@@ -1,6 +1,5 @@
 # Maxfiy fayllar - GitHub'ga yuklanmasin!
 .env
-movies.db
 
 # Python
 __pycache__/
