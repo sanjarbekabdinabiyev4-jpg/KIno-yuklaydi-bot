@@ -132,12 +132,52 @@ class SearchStates(StatesGroup):
     waiting_query = State()
 
 
+class AddChannelStates(StatesGroup):
+    waiting_channel_id   = State()  # @username yoki -100xxx
+    waiting_channel_name = State()  # Kanal nomi
+    waiting_channel_url  = State()  # Kanal linki
+
+
 # ─────────────────────── ADMIN FILTRI ───────────────────────
 
 class IsAdmin(Filter):
     async def __call__(self, event: Message | CallbackQuery) -> bool:
         user_id = event.from_user.id if event.from_user else 0
         return user_id in ADMIN_IDS
+
+
+# ─────────────────────── MAJBURIY OBUNANI TEKSHIRISH ───────────────────────
+
+async def check_user_subscriptions(user_id: int) -> list[dict]:
+    """Foydalanuvchi obuna bo'lmagan kanallar ro'yxatini qaytaradi."""
+    if user_id in ADMIN_IDS:
+        return []
+
+    channels = await db.get_all_channels()
+    if not channels:
+        return []
+
+    unsubscribed = []
+    for ch in channels:
+        ch_id = ch["channel_id"]
+        try:
+            member = await bot.get_chat_member(chat_id=ch_id, user_id=user_id)
+            if member.status in ("left", "kicked"):
+                unsubscribed.append(ch)
+        except Exception as e:
+            logger.warning(f"Kanal obunasini tekshirishda ogohlantirish ({ch_id}): {e}")
+            # Agar bot kanalda admin bo'lmasa yoki xato bersa, bot to'xtab qolmasligi uchun o'tkazib yuboramiz
+            pass
+
+    return unsubscribed
+
+
+def sub_channels_kb(unsubscribed: list[dict]) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    for ch in unsubscribed:
+        builder.row(InlineKeyboardButton(text=f"📢 {ch['channel_name']}", url=ch["channel_url"]))
+    builder.row(InlineKeyboardButton(text="✅ Obunani tekshirish", callback_data="check_sub"))
+    return builder.as_markup()
 
 
 # ─────────────────────── KLAVIATURALAR ───────────────────────
@@ -172,6 +212,9 @@ def admin_panel_kb() -> InlineKeyboardMarkup:
     builder.row(
         InlineKeyboardButton(text="🗑️ Qismlarni tozalash", callback_data="admin_clear_episodes"),
         InlineKeyboardButton(text="📊 Statistika", callback_data="admin_stats"),
+    )
+    builder.row(
+        InlineKeyboardButton(text="📢 Majburiy obuna (Kanallar)", callback_data="admin_channels"),
     )
     builder.row(
         InlineKeyboardButton(text="🏠 Bosh menyu", callback_data="main_menu"),
@@ -258,7 +301,48 @@ async def cmd_start(message: Message, state: FSMContext) -> None:
     await db.add_or_update_user(user.id, user.full_name, user.username)
     is_admin = user.id in ADMIN_IDS
 
+    unsubscribed = await check_user_subscriptions(user.id)
+    if unsubscribed:
+        await message.answer(
+            f"👋 Assalomu alaykum, <b>{user.full_name}</b>!\n\n"
+            f"⚠️ <b>Botdan to'liq foydalanish uchun quyidagi homiy kanalimizga obuna bo'ling:</b>",
+            reply_markup=sub_channels_kb(unsubscribed),
+        )
+        return
+
     await message.answer(
+        f"👋 Assalomu alaykum, <b>{user.full_name}</b>!\n\n"
+        f"🎬 <b>{BOT_NAME}</b> ga xush kelibsiz!\n\n"
+        f"Qidirayotgan kino yoki serialingizning <b>kodini</b> (raqamini) yuboring, "
+        f"yoki quyidagi tugmalardan birini tanlang 👇",
+        reply_markup=main_menu_kb(is_admin=is_admin),
+    )
+
+
+@dp.callback_query(F.data == "check_sub")
+async def cb_check_sub(call: CallbackQuery, state: FSMContext) -> None:
+    user = call.from_user
+    is_admin = user.id in ADMIN_IDS
+    unsubscribed = await check_user_subscriptions(user.id)
+    if unsubscribed:
+        await call.answer("❌ Hali kanalga obuna bo'lmadingiz! Iltimos, obuna bo'ling.", show_alert=True)
+        try:
+            await call.message.edit_text(
+                f"👋 Assalomu alaykum, <b>{user.full_name}</b>!\n\n"
+                f"⚠️ <b>Botdan to'liq foydalanish uchun quyidagi homiy kanalimizga obuna bo'ling:</b>",
+                reply_markup=sub_channels_kb(unsubscribed),
+            )
+        except Exception:
+            pass
+        return
+
+    await call.answer("✅ Rahmat! Obuna tasdiqlandi.", show_alert=True)
+    await state.clear()
+    try:
+        await call.message.delete()
+    except Exception:
+        pass
+    await call.message.answer(
         f"👋 Assalomu alaykum, <b>{user.full_name}</b>!\n\n"
         f"🎬 <b>{BOT_NAME}</b> ga xush kelibsiz!\n\n"
         f"Qidirayotgan kino yoki serialingizning <b>kodini</b> (raqamini) yuboring, "
@@ -420,6 +504,15 @@ async def cb_series_info(call: CallbackQuery) -> None:
 
 @dp.message(StateFilter(None), F.text.regexp(r"^\d+$"))
 async def handle_code(message: Message) -> None:
+    user = message.from_user
+    unsubscribed = await check_user_subscriptions(user.id)
+    if unsubscribed:
+        await message.answer(
+            "⚠️ <b>Kino yoki serialni ko'rish uchun avval homiy kanalimizga obuna bo'ling:</b>",
+            reply_markup=sub_channels_kb(unsubscribed),
+        )
+        return
+
     code = int(message.text.strip())
 
     # 1. Seriallar bazasidan tekshiramiz
@@ -601,6 +694,124 @@ async def cb_admin_stats(call: CallbackQuery) -> None:
         f"👥 Foydalanuvchilar: <b>{users_count}</b> ta"
     )
     await call.message.edit_text(text, reply_markup=back_to_admin_kb())
+
+
+# ─────────────────────── ADMIN: MAJBURIY OBUNA (KANALLAR) ───────────────────────
+
+@dp.callback_query(F.data == "admin_channels", IsAdmin())
+async def cb_admin_channels(call: CallbackQuery) -> None:
+    channels = await db.get_all_channels()
+    builder = InlineKeyboardBuilder()
+
+    text = f"📢 <b>Majburiy obuna kanallari</b> ({len(channels)} ta):\n\n"
+    if not channels:
+        text += "<i>Hozircha hech qanday majburiy kanal ulanmagan.</i>\n\n"
+    else:
+        for idx, ch in enumerate(channels, 1):
+            text += f"{idx}. <b>{ch['channel_name']}</b> ({ch['channel_id']})\n"
+            builder.row(
+                InlineKeyboardButton(
+                    text=f"❌ O'chirish: {ch['channel_name']}",
+                    callback_data=f"del_channel_{ch['id']}",
+                )
+            )
+
+    builder.row(InlineKeyboardButton(text="➕ Yangi kanal qo'shish", callback_data="add_channel_start"))
+    builder.row(InlineKeyboardButton(text="⚙️ Admin Panel", callback_data="admin_panel"))
+
+    await call.message.edit_text(text, reply_markup=builder.as_markup())
+
+
+@dp.callback_query(F.data.startswith("del_channel_"), IsAdmin())
+async def cb_delete_channel(call: CallbackQuery) -> None:
+    ch_id = int(call.data.split("_")[2])
+    channels = await db.get_all_channels()
+    target = next((c for c in channels if c["id"] == ch_id), None)
+    if target:
+        await db.delete_channel(target["channel_id"])
+        await call.answer(f"✅ {target['channel_name']} kanali o'chirildi!", show_alert=True)
+    await cb_admin_channels(call)
+
+
+@dp.callback_query(F.data == "add_channel_start", IsAdmin())
+async def cb_add_channel_start(call: CallbackQuery, state: FSMContext) -> None:
+    await state.set_state(AddChannelStates.waiting_channel_id)
+    await call.message.edit_text(
+        "📢 <b>Yangi kanal qo'shish</b>\n\n"
+        "<b>1-qadam:</b> Kanalning <b>@username</b> yoki ID sini yuboring:\n"
+        "<i>Misol: @cinemaworldbysanjar yoki -1001234567890</i>\n\n"
+        "⚠️ <i>Eslatma: Bot o'sha kanalga <b>Admin</b> qilib qo'shilgan bo'lishi shart!</i>\n"
+        "<i>Bekor qilish uchun /cancel yozing</i>",
+        reply_markup=back_to_admin_kb(),
+    )
+
+
+@dp.message(AddChannelStates.waiting_channel_id, IsAdmin())
+async def fsm_channel_id(message: Message, state: FSMContext) -> None:
+    ch_id = message.text.strip()
+    if not (ch_id.startswith("@") or ch_id.startswith("-100")):
+        if "t.me/" in ch_id:
+            ch_id = "@" + ch_id.split("t.me/")[-1].split("/")[0].replace("@", "")
+        else:
+            ch_id = "@" + ch_id.replace("@", "")
+
+    # Bot kanal adminligini tekshirib ko'ramiz
+    try:
+        chat = await bot.get_chat(ch_id)
+        default_name = chat.title or "Kanal"
+        default_url = f"https://t.me/{chat.username}" if chat.username else f"https://t.me/{ch_id.replace('@', '')}"
+        await state.update_data(channel_id=ch_id, channel_name=default_name, channel_url=default_url)
+        await state.set_state(AddChannelStates.waiting_channel_name)
+        await message.answer(
+            f"✅ Kanal topildi: <b>{default_name}</b>\n\n"
+            f"<b>2-qadam:</b> Kanal nomini tasdiqlang yoki yangi nom yozing:\n"
+            f"<i>Misol: {default_name}</i>"
+        )
+    except Exception as e:
+        logger.warning(f"Kanalni tekshirishda xatolik: {e}")
+        await state.update_data(channel_id=ch_id)
+        await state.set_state(AddChannelStates.waiting_channel_name)
+        await message.answer(
+            f"<b>2-qadam:</b> Kanal nomini kiriting:\n"
+            f"<i>Misol: Cinema World</i>"
+        )
+
+
+@dp.message(AddChannelStates.waiting_channel_name, IsAdmin())
+async def fsm_channel_name(message: Message, state: FSMContext) -> None:
+    name = message.text.strip()
+    await state.update_data(channel_name=name)
+    data = await state.get_data()
+    default_url = data.get("channel_url", "")
+    await state.set_state(AddChannelStates.waiting_channel_url)
+    hint = f"\n<i>Tavsiya: {default_url}</i>" if default_url else ""
+    await message.answer(
+        f"<b>3-qadam:</b> Kanalning to'liq taklif havolasini (linkini) kiriting:{hint}\n"
+        f"<i>Misol: https://t.me/cinemaworldbysanjar</i>"
+    )
+
+
+@dp.message(AddChannelStates.waiting_channel_url, IsAdmin())
+async def fsm_channel_url(message: Message, state: FSMContext) -> None:
+    url = message.text.strip()
+    data = await state.get_data()
+    ch_id = data["channel_id"]
+    name = data["channel_name"]
+
+    success = await db.add_channel(channel_id=ch_id, channel_name=name, channel_url=url)
+    await state.clear()
+
+    if success:
+        await message.answer(
+            f"🎉 <b>Kanal muvaffaqiyatli qo'shildi!</b>\n\n"
+            f"📢 Nomi: <b>{name}</b>\n"
+            f"🆔 ID: <code>{ch_id}</code>\n"
+            f"🔗 Havola: {url}\n\n"
+            f"Endi bot barcha yangi foydalanuvchilardan ushbu kanalga obuna bo'lishni talab qiladi.",
+            reply_markup=back_to_admin_kb(),
+        )
+    else:
+        await message.answer("❌ Kanalni saqlashda xatolik yuz berdi.", reply_markup=back_to_admin_kb())
 
 
 # ─────────────────────── ADMIN: YANGI SERIAL YARATISH (FSM) ───────────────────────

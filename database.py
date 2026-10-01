@@ -155,11 +155,31 @@ async def create_tables() -> None:
             qoshilgan_vaqt TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             UNIQUE(series_code, episode_num)
         )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS channels (
+            id             INTEGER PRIMARY KEY AUTOINCREMENT,
+            channel_id     TEXT UNIQUE NOT NULL,
+            channel_name   TEXT NOT NULL,
+            channel_url    TEXT NOT NULL,
+            qoshilgan_vaqt TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
         """
     ]
 
     for stmt in statements:
         await execute(stmt)
+
+    # Boshlang'ich majburiy kanalni kiritish
+    try:
+        c_count = await fetchval("SELECT COUNT(*) FROM channels")
+        if not c_count:
+            await execute(
+                "INSERT INTO channels (channel_id, channel_name, channel_url) VALUES (?, ?, ?)",
+                ("@cinemaworldbysanjar", "Cinema World", "https://t.me/cinemaworldbysanjar"),
+            )
+    except Exception:
+        pass
 
     # Migratsiya: mavjud bazalar uchun poster_file_id ustunini tekshirish
     try:
@@ -399,3 +419,39 @@ async def get_all_user_ids() -> list[int]:
     """Barcha foydalanuvchi ID lari."""
     rows = await fetchall("SELECT user_id FROM users")
     return [r["user_id"] for r in rows]
+
+
+# ─────────────────────── KANALLAR (MAJBURIY OBUNA) ───────────────────────
+
+async def add_channel(channel_id: str, channel_name: str, channel_url: str) -> bool:
+    """Yangi kanal qo'shadi yoki yangilaydi."""
+    try:
+        await execute(
+            """
+            INSERT INTO channels (channel_id, channel_name, channel_url)
+            VALUES (?, ?, ?)
+            ON CONFLICT(channel_id) DO UPDATE SET
+                channel_name = excluded.channel_name,
+                channel_url  = excluded.channel_url
+            """,
+            (channel_id, channel_name, channel_url),
+        )
+        return True
+    except Exception as e:
+        logger.warning(f"add_channel xatolik: {e}")
+        return False
+
+
+async def get_all_channels() -> list[dict]:
+    """Barcha majburiy obuna kanallarini qaytaradi."""
+    return await fetchall("SELECT * FROM channels ORDER BY id ASC")
+
+
+async def delete_channel(channel_id: str) -> bool:
+    """Kanalni ro'yxatdan o'chiradi."""
+    try:
+        await execute("DELETE FROM channels WHERE channel_id = ?", (channel_id,))
+        return True
+    except Exception as e:
+        logger.warning(f"delete_channel xatolik: {e}")
+        return False

@@ -34,9 +34,16 @@ get_episodes = _mod.get_episodes
 get_episode_file_id = _mod.get_episode_file_id
 delete_episode = _mod.delete_episode
 clear_series_episodes = _mod.clear_series_episodes
+close = getattr(_mod, "close", lambda: None)
+
+# Kanallar
+add_channel = getattr(_mod, "add_channel", None)
+get_all_channels = getattr(_mod, "get_all_channels", None)
+delete_channel = getattr(_mod, "delete_channel", None)
 
 __all__ = [
     "create_tables",
+    "close",
     "add_movie",
     "get_movie_by_code",
     "search_movies_by_name",
@@ -55,4 +62,8 @@ __all__ = [
     "get_episodes",
     "get_episode_file_id",
     "delete_episode",
+    "clear_series_episodes",
+    "add_channel",
+    "get_all_channels",
+    "delete_channel",
 ]
