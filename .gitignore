@@ -1,0 +1,26 @@
+# Maxfiy fayllar - GitHub'ga yuklanmasin!
+.env
+movies.db
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.pyc
+*.egg-info/
+dist/
+build/
+.eggs/
+venv/
+env/
+.venv/
+
+# Logs
+*.log
+bot.log
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
