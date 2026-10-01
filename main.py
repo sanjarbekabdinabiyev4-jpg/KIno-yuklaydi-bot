@@ -1228,6 +1228,7 @@ async def main() -> None:
         await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
     finally:
         await bot.session.close()
+        await db.close()
 
 
 if __name__ == "__main__":
