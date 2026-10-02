@@ -1357,21 +1357,154 @@ async def fsm_episode_video_wrong(message: Message) -> None:
     await message.answer("❌ Iltimos, video yoki video-fayl yuboring! (Yuklashni to'xtatish uchun /cancel yoki tugmani bosing)")
 
 
+pending_quick_videos: dict[int, dict] = {}
+
+
 @dp.message(StateFilter(None), IsAdmin(), F.video | F.document)
-async def handle_unprompted_media(message: Message) -> None:
-    series_list = await db.get_all_series()
+async def handle_unprompted_media(message: Message, state: FSMContext) -> None:
+    file_id = message.video.file_id if message.video else message.document.file_id
+    caption = message.caption or ""
+    filename = message.document.file_name if message.document else ""
+
+    pending_quick_videos[message.from_user.id] = {
+        "file_id": file_id,
+        "caption": caption,
+        "filename": filename,
+    }
+
     builder = InlineKeyboardBuilder()
-    if series_list:
-        for s in series_list:
-            builder.button(text=f"📺 {s['title']} ({s['code']})", callback_data=f"sel_ser_{s['code']}")
-        builder.adjust(1)
-    builder.row(InlineKeyboardButton(text="⚙️ Admin Panel", callback_data="admin_panel"))
+    builder.row(
+        InlineKeyboardButton(text="🧸 Yangi Multfilm (1 qismli)", callback_data="quick_cartoon"),
+        InlineKeyboardButton(text="🎬 Yangi Kino",               callback_data="quick_movie"),
+    )
+    builder.row(
+        InlineKeyboardButton(text="📺 Serialga qism qo'shish",    callback_data="quick_series_list"),
+    )
+    builder.row(
+        InlineKeyboardButton(text="❌ Bekor qilish",             callback_data="cancel_action"),
+    )
 
     await message.answer(
-        "💡 <b>Video qabul qilindi, ammo qaysi serialga yuklash kerakligi tanlanmagan!</b>\n\n"
-        "Serialga qism qo'shish uchun quyidagi ro'yxatdan kerakli serialni tanlang, so'ng videolarni forward qiling 👇",
+        "📥 <b>Video qabul qilindi!</b>\n\n"
+        "Ushbu videoni nima sifatida saqlamoqchisiz? Tanlang 👇",
         reply_markup=builder.as_markup(),
     )
+
+
+@dp.callback_query(F.data == "quick_cartoon", IsAdmin())
+async def cb_quick_cartoon(call: CallbackQuery, state: FSMContext) -> None:
+    user_id = call.from_user.id
+    info = pending_quick_videos.pop(user_id, None)
+    if not info:
+        await call.answer("❌ Video ma'lumoti eskirgan, iltimos qaytadan yuboring!", show_alert=True)
+        return
+
+    await state.clear()
+    next_code = await db.get_next_code()
+    await state.update_data(
+        video_file_id=info["file_id"],
+        kino_kodi=next_code,
+        is_cartoon=True,
+    )
+    await state.set_state(AddMovieStates.waiting_nomi)
+    await call.message.edit_text(
+        f"🧸 <b>Yangi multfilm (1 qismli)</b>\n\n"
+        f"🔢 Avtomatik kod: <b>{next_code}</b>\n\n"
+        f"<b>2-qadam:</b> Multfilm nomini kiriting:\n"
+        f"<i>Misol: Shrek yoki Moana</i>\n\n"
+        f"<i>Bekor qilish uchun /cancel yozing</i>",
+        reply_markup=back_to_admin_kb(),
+    )
+
+
+@dp.callback_query(F.data == "quick_movie", IsAdmin())
+async def cb_quick_movie(call: CallbackQuery, state: FSMContext) -> None:
+    user_id = call.from_user.id
+    info = pending_quick_videos.pop(user_id, None)
+    if not info:
+        await call.answer("❌ Video ma'lumoti eskirgan, iltimos qaytadan yuboring!", show_alert=True)
+        return
+
+    await state.clear()
+    next_code = await db.get_next_code()
+    await state.update_data(
+        video_file_id=info["file_id"],
+        kino_kodi=next_code,
+        is_cartoon=False,
+    )
+    await state.set_state(AddMovieStates.waiting_nomi)
+    await call.message.edit_text(
+        f"🎬 <b>Yangi kino</b>\n\n"
+        f"🔢 Avtomatik kod: <b>{next_code}</b>\n\n"
+        f"<b>2-qadam:</b> Kino nomini kiriting:\n\n"
+        f"<i>Bekor qilish uchun /cancel yozing</i>",
+        reply_markup=back_to_admin_kb(),
+    )
+
+
+@dp.callback_query(F.data == "quick_series_list", IsAdmin())
+async def cb_quick_series_list(call: CallbackQuery, state: FSMContext) -> None:
+    user_id = call.from_user.id
+    info = pending_quick_videos.get(user_id)
+    if not info:
+        await call.answer("❌ Video ma'lumoti eskirgan!", show_alert=True)
+        return
+
+    series_list = await db.get_all_series()
+    if not series_list:
+        await call.message.edit_text(
+            "⚠️ Bazada hali birorta ham serial yo'q!\nAvval Admin Paneldan serial yarating.",
+            reply_markup=back_to_admin_kb(),
+        )
+        return
+
+    builder = InlineKeyboardBuilder()
+    for s in series_list:
+        builder.button(text=f"📺 {s['title']} ({s['code']})", callback_data=f"qser_{s['code']}")
+    builder.adjust(1)
+    builder.row(InlineKeyboardButton(text="🔙 Orqaga", callback_data="cancel_action"))
+
+    await call.message.edit_text(
+        "📺 <b>Ushbu qism qaysi serialga tegishli?</b>\n\n"
+        "Serialni tanlang 👇",
+        reply_markup=builder.as_markup(),
+    )
+
+
+@dp.callback_query(F.data.startswith("qser_"), IsAdmin())
+async def cb_quick_series_selected(call: CallbackQuery, state: FSMContext) -> None:
+    series_code = int(call.data.split("_")[1])
+    user_id = call.from_user.id
+    info = pending_quick_videos.pop(user_id, None)
+    if not info:
+        await call.answer("❌ Video topilmadi!", show_alert=True)
+        return
+
+    file_id = info["file_id"]
+    caption = info["caption"]
+    filename = info["filename"]
+
+    # Qism raqamini aniqlash
+    ep_num = extract_episode_number(caption, filename)
+    if not ep_num or ep_num <= 0:
+        ep_num = await db.get_next_episode_num(series_code)
+
+    success, is_new = await db.add_episode(series_code, ep_num, file_id)
+    series = await db.get_series_by_code(series_code)
+    title = series["title"] if series else f"Serial {series_code}"
+
+    if success:
+        status = "qo'shildi" if is_new else "yangilandi"
+        episodes = await db.get_episodes(series_code)
+        ranges = format_episode_ranges(episodes)
+        await call.message.edit_text(
+            f"✅ <b>{title}</b> serialiga <b>{ep_num}-qism</b> muvaffaqiyatli {status}!\n\n"
+            f"📼 <b>Mavjud qismlar:</b> {ranges} ({len(episodes)} ta)\n\n"
+            f"<i>Keyingi qismlarni ham to'g'ridan-to'g'ri tashlashingiz mumkin.</i>",
+            reply_markup=back_to_admin_kb(),
+        )
+    else:
+        await call.message.edit_text("❌ Qismni saqlashda xatolik yuz berdi.", reply_markup=back_to_admin_kb())
 
 
 # ─────────────────────── ADMIN: QISMLARNI TOZALASH ───────────────────────
