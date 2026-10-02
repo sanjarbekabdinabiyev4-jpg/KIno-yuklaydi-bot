@@ -192,6 +192,9 @@ def main_menu_kb(is_admin: bool = False) -> InlineKeyboardMarkup:
         InlineKeyboardButton(text="🎬 Barcha kinolar",   callback_data="all_movies"),
         InlineKeyboardButton(text="📺 Barcha seriallar", callback_data="all_series"),
     )
+    builder.row(
+        InlineKeyboardButton(text="🧸 Multfilmlar",      callback_data="all_cartoons"),
+    )
     if is_admin:
         builder.row(
             InlineKeyboardButton(text="⚙️ Admin Panel", callback_data="admin_panel"),
@@ -206,14 +209,15 @@ def admin_panel_kb() -> InlineKeyboardMarkup:
         InlineKeyboardButton(text="📺 Yangi serial yaratish", callback_data="admin_create_series"),
     )
     builder.row(
+        InlineKeyboardButton(text="🧸 Multfilm qo'shish", callback_data="admin_add_cartoon"),
         InlineKeyboardButton(text="➕ Serialga qism qo'shish", callback_data="admin_add_episode"),
+    )
+    builder.row(
         InlineKeyboardButton(text="🖼️ Serialga rasm qo'yish", callback_data="admin_set_poster"),
-    )
-    builder.row(
         InlineKeyboardButton(text="🗑️ Qismlarni tozalash", callback_data="admin_clear_episodes"),
-        InlineKeyboardButton(text="📊 Statistika", callback_data="admin_stats"),
     )
     builder.row(
+        InlineKeyboardButton(text="📊 Statistika", callback_data="admin_stats"),
         InlineKeyboardButton(text="📢 Majburiy obuna (Kanallar)", callback_data="admin_channels"),
     )
     builder.row(
@@ -453,6 +457,51 @@ async def cb_all_series(call: CallbackQuery) -> None:
     for s in series_list:
         text += f"• [{s['code']}] <b>{s['title']}</b> — {s['genre']}\n"
         builder.button(text=f"📺 {s['title']}", callback_data=f"series_info_{s['code']}")
+    builder.adjust(1)
+    builder.row(InlineKeyboardButton(text="🏠 Bosh menyu", callback_data="main_menu"))
+
+    await call.message.edit_text(text, reply_markup=builder.as_markup())
+
+
+@dp.callback_query(F.data == "all_cartoons")
+async def cb_all_cartoons(call: CallbackQuery) -> None:
+    user = call.from_user
+    unsubscribed = await check_user_subscriptions(user.id)
+    if unsubscribed:
+        await call.answer("⚠️ Avval kanalga obuna bo'ling!", show_alert=True)
+        await call.message.edit_text(
+            "⚠️ <b>Multfilmlarni ko'rish uchun quyidagi homiy kanalimizga obuna bo'ling:</b>",
+            reply_markup=sub_channels_kb(unsubscribed),
+        )
+        return
+
+    data = await db.get_all_cartoons()
+    movies = data.get("movies", [])
+    series = data.get("series", [])
+
+    if not movies and not series:
+        await call.message.edit_text(
+            "📭 <b>Bazada hali multfilm yo'q.</b>\n\nTez orada yangi multfilmlar joylanadi!",
+            reply_markup=back_to_menu_kb(),
+        )
+        return
+
+    builder = InlineKeyboardBuilder()
+    text = f"🧸 <b>Barcha multfilmlar</b> (Jami: {len(movies) + len(series)} ta):\n\n"
+
+    if movies:
+        text += "🎬 <b>1 qismli multfilmlar:</b>\n"
+        for m in movies[:10]:
+            text += f"• [{m['kino_kodi']}] {m['nomi']} ({m['sifat']})\n"
+            builder.button(text=f"🎬 {m['nomi']}", callback_data=f"get_movie_{m['kino_kodi']}")
+        text += "\n"
+
+    if series:
+        text += "📺 <b>Multserial va Animelar:</b>\n"
+        for s in series[:10]:
+            text += f"• [{s['code']}] <b>{s['title']}</b>\n"
+            builder.button(text=f"📺 {s['title']}", callback_data=f"series_info_{s['code']}")
+
     builder.adjust(1)
     builder.row(InlineKeyboardButton(text="🏠 Bosh menyu", callback_data="main_menu"))
 
@@ -814,6 +863,57 @@ async def fsm_channel_url(message: Message, state: FSMContext) -> None:
         await message.answer("❌ Kanalni saqlashda xatolik yuz berdi.", reply_markup=back_to_admin_kb())
 
 
+# ─────────────────────── ADMIN: MULTFILM QO'SHISH (FSM) ───────────────────────
+
+@dp.callback_query(F.data == "admin_add_cartoon", IsAdmin())
+async def cb_admin_add_cartoon(call: CallbackQuery) -> None:
+    builder = InlineKeyboardBuilder()
+    builder.row(
+        InlineKeyboardButton(text="🎬 1 qismli multfilm (kino)", callback_data="add_cartoon_movie"),
+        InlineKeyboardButton(text="📺 Ko'p qismli multfilm (serial)", callback_data="add_cartoon_series"),
+    )
+    builder.row(InlineKeyboardButton(text="🔙 Admin Panel", callback_data="admin_panel"))
+
+    await call.message.edit_text(
+        "🧸 <b>Multfilm qo'shish</b>\n\n"
+        "Qaysi turdagi multfilm qo'shmoqchisiz?\n\n"
+        "• <b>1 qismli multfilm</b> — to'liq metrajli multfilm kino (masalan: <i>Shrek, Moana</i>)\n"
+        "• <b>Ko'p qismli multfilm</b> — qismlardan iborat multserial yoki anime (masalan: <i>Masha va Medved, Naruto</i>)",
+        reply_markup=builder.as_markup(),
+    )
+
+
+@dp.callback_query(F.data == "add_cartoon_movie", IsAdmin())
+async def cb_add_cartoon_movie(call: CallbackQuery, state: FSMContext) -> None:
+    await state.clear()
+    next_code = await db.get_next_code()
+    await state.update_data(kino_kodi=next_code, is_cartoon=True)
+    await state.set_state(AddMovieStates.waiting_video)
+    await call.message.edit_text(
+        f"🎬 <b>1 qismli multfilm qo'shish</b>\n\n"
+        f"🔢 Ushbu multfilm uchun avtomatik kod: <b>{next_code}</b>\n\n"
+        f"<b>1-qadam:</b> Multfilm videosini yuboring 👇\n\n"
+        f"<i>Bekor qilish uchun /cancel yozing</i>",
+        reply_markup=back_to_admin_kb(),
+    )
+
+
+@dp.callback_query(F.data == "add_cartoon_series", IsAdmin())
+async def cb_add_cartoon_series(call: CallbackQuery, state: FSMContext) -> None:
+    await state.clear()
+    next_code = await db.get_next_code()
+    await state.update_data(code=next_code, is_cartoon=True)
+    await state.set_state(AddSeriesStates.waiting_title)
+    await call.message.edit_text(
+        f"📺 <b>Ko'p qismli multfilm / Anime yaratish</b>\n\n"
+        f"🔢 Ushbu multserial uchun avtomatik kod: <b>{next_code}</b>\n\n"
+        f"<b>1-qadam:</b> Multserial yoki Anime nomini kiriting:\n"
+        f"<i>Misol: Masha va Medved</i>\n\n"
+        f"<i>Bekor qilish uchun /cancel yozing</i>",
+        reply_markup=back_to_admin_kb(),
+    )
+
+
 # ─────────────────────── ADMIN: YANGI SERIAL YARATISH (FSM) ───────────────────────
 
 @dp.callback_query(F.data == "admin_create_series", IsAdmin())
@@ -832,7 +932,18 @@ async def cb_create_series_start(call: CallbackQuery, state: FSMContext) -> None
 
 @dp.message(AddSeriesStates.waiting_title, IsAdmin())
 async def fsm_series_title(message: Message, state: FSMContext) -> None:
-    await state.update_data(title=message.text.strip())
+    title = message.text.strip()
+    await state.update_data(title=title)
+    data = await state.get_data()
+    if data.get("is_cartoon"):
+        await state.update_data(genre="Multfilm")
+        await state.set_state(AddSeriesStates.waiting_poster)
+        await message.answer(
+            f"✅ Janr: <b>Multfilm</b>\n\n"
+            f"<b>2-qadam:</b> Multfilm rasmini (posterini) yuboring 👇\n\n"
+            f"<i>(Agar rasm qo'ymoqchi bo'lmasangiz, /skip deb yozing)</i>"
+        )
+        return
     await state.set_state(AddSeriesStates.waiting_genre)
     await message.answer(
         "<b>3-qadam:</b> Serial janrini kiriting:\n"
@@ -1333,7 +1444,14 @@ async def fsm_movie_video_invalid(message: Message) -> None:
 
 @dp.message(AddMovieStates.waiting_nomi, IsAdmin())
 async def fsm_movie_title(message: Message, state: FSMContext) -> None:
-    await state.update_data(nomi=message.text.strip())
+    nomi = message.text.strip()
+    await state.update_data(nomi=nomi)
+    data = await state.get_data()
+    if data.get("is_cartoon"):
+        await state.update_data(janri="Multfilm")
+        await state.set_state(AddMovieStates.waiting_tili)
+        await message.answer("✅ Janr: <b>Multfilm</b> deb belgilandi.\n\n<b>3-qadam:</b> Tilini kiriting (masalan: O'zbek):")
+        return
     await state.set_state(AddMovieStates.waiting_janri)
     await message.answer("<b>4-qadam:</b> Janrini kiriting:")
 

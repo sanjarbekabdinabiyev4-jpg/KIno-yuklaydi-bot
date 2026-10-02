@@ -374,6 +374,17 @@ async def get_all_movies() -> list[dict]:
     return await fetchall("SELECT * FROM movies ORDER BY kino_kodi")
 
 
+async def get_all_cartoons() -> dict:
+    """Barcha multfilmlarni (kinolar va seriallar/animelar) qaytaradi."""
+    movies = await fetchall(
+        "SELECT * FROM movies WHERE LOWER(janri) LIKE '%mult%' OR LOWER(janri) LIKE '%anim%' ORDER BY kino_kodi DESC"
+    )
+    series = await fetchall(
+        "SELECT * FROM series WHERE LOWER(genre) LIKE '%mult%' OR LOWER(genre) LIKE '%anim%' ORDER BY code DESC"
+    )
+    return {"movies": movies, "series": series}
+
+
 async def delete_movie(kino_kodi: int) -> bool:
     """Kino kodiga ko'ra kinoni o'chiradi."""
     try:

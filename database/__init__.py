@@ -13,6 +13,7 @@ get_movie_by_code = _mod.get_movie_by_code
 search_movies_by_name = _mod.search_movies_by_name
 get_all_movies = _mod.get_all_movies
 delete_movie = _mod.delete_movie
+get_all_cartoons = getattr(_mod, "get_all_cartoons", None)
 get_movies_count = _mod.get_movies_count
 add_or_update_user = _mod.add_or_update_user
 get_users_count = _mod.get_users_count
