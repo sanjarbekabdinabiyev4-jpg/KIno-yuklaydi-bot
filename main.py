@@ -8,7 +8,7 @@ from dotenv import load_dotenv
 from aiogram import Bot, Dispatcher, F
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
-from aiogram.filters import CommandStart, Command, Filter, StateFilter
+from aiogram.filters import CommandStart, Command, Filter, StateFilter, CommandObject
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
@@ -31,6 +31,7 @@ BOT_TOKEN = os.getenv("BOT_TOKEN", "")
 _admin_raw = os.getenv("ADMIN_IDS", "")
 ADMIN_IDS = [int(x.strip()) for x in _admin_raw.split(",") if x.strip().isdigit()]
 BOT_NAME = os.getenv("BOT_NAME", "Kino & Serial Bot")
+BOT_USERNAME = os.getenv("BOT_USERNAME", "Kinodownloaderbot").replace("@", "").strip()
 
 if not BOT_TOKEN:
     raise ValueError("❌ BOT_TOKEN .env faylida ko'rsatilmagan!")
@@ -298,21 +299,202 @@ def episodes_paginated_kb(
 
 # ─────────────────────── FOYDALANUVCHI: /start, /myid, MENYU ───────────────────────
 
+async def deliver_payload(target: Message, payload: str) -> bool:
+    """
+    start=... parametri orqali kelgan so'rovni bajaradi (Deep Linking).
+    Formatlar:
+      - ep_{series_code}_{ep_num} (masalan: ep_2_1, ep_2_51)
+      - ser_{series_code} yoki serial_{series_code}
+      - kino_{kino_kodi} yoki movie_{kino_kodi}
+      - raqam (masalan: 2, 5)
+    """
+    payload = (payload or "").strip()
+    if not payload:
+        return False
+
+    # 1. Muayyan qism: ep_2_1 yoki ep_2_51
+    if payload.startswith("ep_"):
+        parts = payload.split("_")
+        if len(parts) >= 3 and parts[1].isdigit() and parts[2].isdigit():
+            s_code = int(parts[1])
+            ep_num = int(parts[2])
+            file_id = await db.get_episode_file_id(s_code, ep_num)
+            if file_id:
+                series = await db.get_series_by_code(s_code)
+                title = series["title"] if series else f"Serial {s_code}"
+                caption = (
+                    f"📺 <b>{title}</b>\n"
+                    f"🎬 <b>{ep_num}-qism</b>\n\n"
+                    f"🔢 Serial kodi: <code>{s_code}</code>"
+                )
+                builder = InlineKeyboardBuilder()
+                builder.row(InlineKeyboardButton(text="📺 Barcha qismlar", callback_data=f"series_info_{s_code}"))
+                builder.row(InlineKeyboardButton(text="🏠 Asosiy menyu", callback_data="main_menu"))
+                try:
+                    await target.answer_video(
+                        video=file_id,
+                        caption=caption,
+                        protect_content=True,
+                        reply_markup=builder.as_markup(),
+                    )
+                except Exception:
+                    await target.answer_document(
+                        document=file_id,
+                        caption=caption,
+                        protect_content=True,
+                        reply_markup=builder.as_markup(),
+                    )
+                return True
+            else:
+                await target.answer(
+                    f"⚠️ Kechirasiz, ushbu serialning <b>{ep_num}-qismi</b> hozircha bazada mavjud emas.",
+                    reply_markup=back_to_menu_kb(),
+                )
+                return True
+
+    # 2. Serial barcha qismlari: ser_2 yoki serial_2
+    if payload.startswith("ser_") or payload.startswith("serial_"):
+        raw_code = payload.replace("serial_", "").replace("ser_", "")
+        if raw_code.isdigit():
+            s_code = int(raw_code)
+            series = await db.get_series_by_code(s_code)
+            if series:
+                episodes = await db.get_episodes(s_code)
+                text = (
+                    f"📺 <b>{series['title']}</b>\n\n"
+                    f"🔢 <b>Kodi:</b> <code>{series['code']}</code>\n"
+                    f"🎭 <b>Janr:</b> {series['genre']}\n"
+                    f"📼 <b>Mavjud qismlar:</b> {len(episodes)} ta\n\n"
+                    f"Tomosha qilish uchun kerakli qismni tanlang 👇"
+                )
+                markup = episodes_paginated_kb(s_code, episodes, page=0, per_page=10)
+                if series.get("poster_file_id"):
+                    try:
+                        await target.answer_photo(
+                            photo=series["poster_file_id"],
+                            caption=text,
+                            reply_markup=markup,
+                        )
+                        return True
+                    except Exception:
+                        pass
+                await target.answer(text, reply_markup=markup)
+                return True
+
+    # 3. Kino: kino_5 yoki movie_5
+    if payload.startswith("kino_") or payload.startswith("movie_"):
+        raw_code = payload.replace("movie_", "").replace("kino_", "")
+        if raw_code.isdigit():
+            k_code = int(raw_code)
+            movie = await db.get_movie_by_code(k_code)
+            if movie:
+                caption = (
+                    f"🎬 <b>{movie['nomi']}</b>\n\n"
+                    f"🎭 Janr: {movie['janri']}\n"
+                    f"🌐 Til: {movie['tili']}\n"
+                    f"💿 Sifat: {movie['sifat']}\n"
+                    f"🔢 Kodi: <code>{movie['kino_kodi']}</code>"
+                )
+                builder = InlineKeyboardBuilder()
+                builder.row(InlineKeyboardButton(text="🏠 Asosiy menyu", callback_data="main_menu"))
+                try:
+                    await target.answer_video(
+                        video=movie["video_file_id"],
+                        caption=caption,
+                        protect_content=True,
+                        reply_markup=builder.as_markup(),
+                    )
+                except Exception:
+                    await target.answer_document(
+                        document=movie["video_file_id"],
+                        caption=caption,
+                        protect_content=True,
+                        reply_markup=builder.as_markup(),
+                    )
+                return True
+
+    # 4. Toza raqam: masalan "2" yoki "5"
+    if payload.isdigit():
+        code = int(payload)
+        series = await db.get_series_by_code(code)
+        if series:
+            episodes = await db.get_episodes(code)
+            text = (
+                f"📺 <b>{series['title']}</b>\n\n"
+                f"🔢 <b>Kodi:</b> <code>{series['code']}</code>\n"
+                f"🎭 <b>Janr:</b> {series['genre']}\n"
+                f"📼 <b>Mavjud qismlar:</b> {len(episodes)} ta\n\n"
+                f"Tomosha qilish uchun kerakli qismni tanlang 👇"
+            )
+            markup = episodes_paginated_kb(code, episodes, page=0, per_page=10)
+            if series.get("poster_file_id"):
+                try:
+                    await target.answer_photo(
+                        photo=series["poster_file_id"],
+                        caption=text,
+                        reply_markup=markup,
+                    )
+                    return True
+                except Exception:
+                    pass
+            await target.answer(text, reply_markup=markup)
+            return True
+
+        movie = await db.get_movie_by_code(code)
+        if movie:
+            caption = (
+                f"🎬 <b>{movie['nomi']}</b>\n\n"
+                f"🎭 Janr: {movie['janri']}\n"
+                f"🌐 Til: {movie['tili']}\n"
+                f"💿 Sifat: {movie['sifat']}\n"
+                f"🔢 Kodi: <code>{movie['kino_kodi']}</code>"
+            )
+            builder = InlineKeyboardBuilder()
+            builder.row(InlineKeyboardButton(text="🏠 Asosiy menyu", callback_data="main_menu"))
+            try:
+                await target.answer_video(
+                    video=movie["video_file_id"],
+                    caption=caption,
+                    protect_content=True,
+                    reply_markup=builder.as_markup(),
+                )
+            except Exception:
+                await target.answer_document(
+                    document=movie["video_file_id"],
+                    caption=caption,
+                    protect_content=True,
+                    reply_markup=builder.as_markup(),
+                )
+            return True
+
+    return False
+
+
 @dp.message(CommandStart())
-async def cmd_start(message: Message, state: FSMContext) -> None:
+async def cmd_start(message: Message, command: CommandObject, state: FSMContext) -> None:
     await state.clear()
     user = message.from_user
     await db.add_or_update_user(user.id, user.full_name, user.username)
     is_admin = user.id in ADMIN_IDS
 
+    payload = (command.args or "").strip()
+
     unsubscribed = await check_user_subscriptions(user.id)
     if unsubscribed:
+        if payload:
+            await state.update_data(pending_payload=payload)
         await message.answer(
             f"👋 Assalomu alaykum, <b>{user.full_name}</b>!\n\n"
-            f"⚠️ <b>Botdan to'liq foydalanish uchun quyidagi homiy kanalimizga obuna bo'ling:</b>",
+            f"⚠️ <b>Botdan to'liq foydalanish va so'ralgan videoni olish uchun homiy kanalimizga obuna bo'ling:</b>",
             reply_markup=sub_channels_kb(unsubscribed),
         )
         return
+
+    # Agar start payload (deep link) orqali kelsa (masalan kanal postidagi tugmadan)
+    if payload:
+        delivered = await deliver_payload(message, payload)
+        if delivered:
+            return
 
     await message.answer(
         f"👋 Assalomu alaykum, <b>{user.full_name}</b>!\n\n"
@@ -333,7 +515,7 @@ async def cb_check_sub(call: CallbackQuery, state: FSMContext) -> None:
         try:
             await call.message.edit_text(
                 f"👋 Assalomu alaykum, <b>{user.full_name}</b>!\n\n"
-                f"⚠️ <b>Botdan to'liq foydalanish uchun quyidagi homiy kanalimizga obuna bo'ling:</b>",
+                f"⚠️ <b>Botdan to'liq foydalanish va videoni olish uchun homiy kanalimizga obuna bo'ling:</b>",
                 reply_markup=sub_channels_kb(unsubscribed),
             )
         except Exception:
@@ -341,11 +523,20 @@ async def cb_check_sub(call: CallbackQuery, state: FSMContext) -> None:
         return
 
     await call.answer("✅ Rahmat! Obuna tasdiqlandi.", show_alert=True)
+    data = await state.get_data()
+    pending_payload = data.get("pending_payload")
     await state.clear()
     try:
         await call.message.delete()
     except Exception:
         pass
+
+    # Agar foydalanuvchi kanaldagi qism havolasi orqali kirgan bo'lsa, obuna bo'lgach o'sha qismni yuboramiz!
+    if pending_payload:
+        delivered = await deliver_payload(call.message, pending_payload)
+        if delivered:
+            return
+
     await call.message.answer(
         f"👋 Assalomu alaykum, <b>{user.full_name}</b>!\n\n"
         f"🎬 <b>{BOT_NAME}</b> ga xush kelibsiz!\n\n"
@@ -675,10 +866,15 @@ async def cb_send_episode(call: CallbackQuery) -> None:
     series = await db.get_series_by_code(series_code)
     title = series["title"] if series else "Serial"
 
+    admin_link = ""
+    if call.from_user and call.from_user.id in ADMIN_IDS:
+        admin_link = f"\n\n🔗 <b>Kanal havolasi (@PostBot uchun):</b>\n<code>https://t.me/{BOT_USERNAME}?start=ep_{series_code}_{episode_num}</code>"
+
     caption = (
         f"📺 <b>{title}</b>\n"
         f"🎬 <b>{episode_num}-qism</b>\n\n"
         f"🔢 Serial kodi: <code>{series_code}</code>"
+        f"{admin_link}"
     )
 
     try:
@@ -1266,6 +1462,11 @@ async def _flush_batch_summary(chat_id: int, user_id: int, series_code: int, ser
     else:
         lines.append("🎉 <i>Barcha qismlar to'liq saqlandi!</i>")
 
+    if items:
+        last_ep = items[-1]["ep_num"]
+        deep_link = f"https://t.me/{BOT_USERNAME}?start=ep_{series_code}_{last_ep}"
+        lines.append(f"\n🔗 <b>Kanal uchun havola ({last_ep}-qism):</b>\n<code>{deep_link}</code>")
+
     lines.append("\n▶️ Yana video tashlashingiz yoki tugatish tugmasini bosishingiz mumkin:")
 
     builder = InlineKeyboardBuilder()
@@ -1302,12 +1503,19 @@ async def fsm_episode_video(message: Message, state: FSMContext) -> None:
 
     # Kanaldan forward qilingan videoning izohidan yoki nomidan qismni aniqlash
     detected_ep = extract_episode_number(caption, filename)
+    next_ep = await db.get_next_episode_num(series_code)
+    episodes = await db.get_episodes(series_code)
+    existing_nums = {e["episode_num"] for e in episodes}
 
     async with episode_upload_lock:
         if detected_ep is not None and detected_ep > 0:
-            ep_num = detected_ep
+            # Agar 1-qism deb aniqlansa, ammo bazada allaqachon ko'p qismlar bo'lsa (masalan 4-fasl 1-qism):
+            if detected_ep in existing_nums and next_ep > 10 and detected_ep == 1:
+                ep_num = next_ep
+            else:
+                ep_num = detected_ep
         else:
-            ep_num = await db.get_next_episode_num(series_code)
+            ep_num = next_ep
 
         success, is_new = await db.add_episode(series_code, ep_num, file_id)
 
@@ -1475,7 +1683,7 @@ async def cb_quick_series_list(call: CallbackQuery, state: FSMContext) -> None:
 async def cb_quick_series_selected(call: CallbackQuery, state: FSMContext) -> None:
     series_code = int(call.data.split("_")[1])
     user_id = call.from_user.id
-    info = pending_quick_videos.pop(user_id, None)
+    info = pending_quick_videos.get(user_id)
     if not info:
         await call.answer("❌ Video topilmadi!", show_alert=True)
         return
@@ -1486,9 +1694,39 @@ async def cb_quick_series_selected(call: CallbackQuery, state: FSMContext) -> No
 
     # Qism raqamini aniqlash
     ep_num = extract_episode_number(caption, filename)
-    if not ep_num or ep_num <= 0:
-        ep_num = await db.get_next_episode_num(series_code)
+    next_ep = await db.get_next_episode_num(series_code)
+    episodes = await db.get_episodes(series_code)
+    existing_nums = {e["episode_num"] for e in episodes}
 
+    if not ep_num or ep_num <= 0:
+        ep_num = next_ep
+
+    # Agar ep_num allaqachon mavjud bo'lsa va bu serialda bir nechta qism bo'lsa (masalan 4-fasl 1-qism):
+    if ep_num in existing_nums and ep_num != next_ep:
+        series = await db.get_series_by_code(series_code)
+        title = series["title"] if series else f"Serial {series_code}"
+        builder = InlineKeyboardBuilder()
+        builder.button(
+            text=f"▶️ {next_ep}-qism qilib saqlash (Yangi qism)",
+            callback_data=f"save_qep_{series_code}_{next_ep}",
+        )
+        builder.button(
+            text=f"🔄 Mavjud {ep_num}-qismni almashtirish",
+            callback_data=f"save_qep_{series_code}_{ep_num}",
+        )
+        builder.adjust(1)
+        builder.row(InlineKeyboardButton(text="❌ Bekor qilish", callback_data="cancel_action"))
+
+        await call.message.edit_text(
+            f"⚠️ <b>{title}</b> serialida <b>{ep_num}-qism</b> allaqachon mavjud!\n\n"
+            f"Videodan <b>{ep_num}-qism</b> deb aniqlandi (ehtimol yangi fasl).\n"
+            f"Bazada navbatdagi kutilayotgan qism: <b>{next_ep}-qism</b>.\n\n"
+            f"Ushbu video nechanchi qism qilib saqlansin?",
+            reply_markup=builder.as_markup(),
+        )
+        return
+
+    pending_quick_videos.pop(user_id, None)
     success, is_new = await db.add_episode(series_code, ep_num, file_id)
     series = await db.get_series_by_code(series_code)
     title = series["title"] if series else f"Serial {series_code}"
@@ -1497,10 +1735,46 @@ async def cb_quick_series_selected(call: CallbackQuery, state: FSMContext) -> No
         status = "qo'shildi" if is_new else "yangilandi"
         episodes = await db.get_episodes(series_code)
         ranges = format_episode_ranges(episodes)
+        deep_link = f"https://t.me/{BOT_USERNAME}?start=ep_{series_code}_{ep_num}"
         await call.message.edit_text(
             f"✅ <b>{title}</b> serialiga <b>{ep_num}-qism</b> muvaffaqiyatli {status}!\n\n"
             f"📼 <b>Mavjud qismlar:</b> {ranges} ({len(episodes)} ta)\n\n"
-            f"<i>Keyingi qismlarni ham to'g'ridan-to'g'ri tashlashingiz mumkin.</i>",
+            f"🔗 <b>Kanal uchun havola (@PostBot uchun):</b>\n"
+            f"<code>{deep_link}</code>\n\n"
+            f"<i>💡 Buni kanaldagi post tugmasiga havola (URL) qilib qo'ysangiz, odamlar bitta bosishda shu qismni oladi!</i>",
+            reply_markup=back_to_admin_kb(),
+        )
+    else:
+        await call.message.edit_text("❌ Qismni saqlashda xatolik yuz berdi.", reply_markup=back_to_admin_kb())
+
+
+@dp.callback_query(F.data.startswith("save_qep_"), IsAdmin())
+async def cb_save_quick_episode(call: CallbackQuery) -> None:
+    parts = call.data.split("_")
+    series_code = int(parts[2])
+    ep_num = int(parts[3])
+    user_id = call.from_user.id
+    info = pending_quick_videos.pop(user_id, None)
+    if not info:
+        await call.answer("❌ Video ma'lumoti eskirgan!", show_alert=True)
+        return
+
+    file_id = info["file_id"]
+    success, is_new = await db.add_episode(series_code, ep_num, file_id)
+    series = await db.get_series_by_code(series_code)
+    title = series["title"] if series else f"Serial {series_code}"
+
+    if success:
+        status = "qo'shildi" if is_new else "yangilandi"
+        episodes = await db.get_episodes(series_code)
+        ranges = format_episode_ranges(episodes)
+        deep_link = f"https://t.me/{BOT_USERNAME}?start=ep_{series_code}_{ep_num}"
+        await call.message.edit_text(
+            f"✅ <b>{title}</b> serialiga <b>{ep_num}-qism</b> muvaffaqiyatli {status}!\n\n"
+            f"📼 <b>Mavjud qismlar:</b> {ranges} ({len(episodes)} ta)\n\n"
+            f"🔗 <b>Kanal uchun havola (@PostBot uchun):</b>\n"
+            f"<code>{deep_link}</code>\n\n"
+            f"<i>💡 Buni kanaldagi post tugmasiga havola (URL) qilib qo'ysangiz, odamlar bitta bosishda shu qismni oladi!</i>",
             reply_markup=back_to_admin_kb(),
         )
     else:
@@ -1682,6 +1956,15 @@ async def main() -> None:
         await start_web_server()
     except Exception as e:
         logger.warning(f"Web serverni ishga tushirishda ogohlantirish: {e}")
+
+    global BOT_USERNAME
+    try:
+        bot_info = await bot.get_me()
+        if bot_info.username:
+            BOT_USERNAME = bot_info.username
+            logger.info(f"Bot username: @{BOT_USERNAME}")
+    except Exception as e:
+        logger.warning(f"bot.get_me() ogohlantirish: {e}")
 
     await bot.delete_webhook(drop_pending_updates=True)
     logger.info("Bot ishga tushdi! Seriallar va kinolar qidirishga tayyor.")
