@@ -222,6 +222,9 @@ def admin_panel_kb() -> InlineKeyboardMarkup:
         InlineKeyboardButton(text="📢 Majburiy obuna (Kanallar)", callback_data="admin_channels"),
     )
     builder.row(
+        InlineKeyboardButton(text="🔗 Kanal havolalari (Linklar)", callback_data="admin_all_links"),
+    )
+    builder.row(
         InlineKeyboardButton(text="🏠 Bosh menyu", callback_data="main_menu"),
     )
     return builder.as_markup()
@@ -792,6 +795,11 @@ async def handle_code(message: Message) -> None:
     # 2. Kinolar bazasidan tekshiramiz
     movie = await db.get_movie_by_code(code)
     if movie:
+        admin_link = ""
+        if user.id in ADMIN_IDS:
+            deep_link = f"https://t.me/{BOT_USERNAME}?start=kino_{code}"
+            admin_link = f"\n\n🔗 <b>Kanal havolasi (@PostBot uchun):</b>\n<code>{deep_link}</code>"
+
         caption = (
             f"🎬 <b>{movie['nomi']}</b>\n\n"
             f"🔢 <b>Kod:</b> <code>{movie['kino_kodi']}</code>\n"
@@ -799,6 +807,7 @@ async def handle_code(message: Message) -> None:
             f"🌍 <b>Til:</b> {movie['tili']}\n"
             f"📺 <b>Sifat:</b> {movie['sifat']}\n\n"
             f"🔒 <i>Ushbu video himoyalangan (uzatish cheklangan).</i>"
+            f"{admin_link}"
         )
         try:
             await message.answer_video(
@@ -897,12 +906,18 @@ async def cb_get_movie(call: CallbackQuery) -> None:
         await call.answer("Kino topilmadi!", show_alert=True)
         return
 
+    admin_link = ""
+    if call.from_user and call.from_user.id in ADMIN_IDS:
+        deep_link = f"https://t.me/{BOT_USERNAME}?start=kino_{kino_kodi}"
+        admin_link = f"\n\n🔗 <b>Kanal havolasi (@PostBot uchun):</b>\n<code>{deep_link}</code>"
+
     caption = (
         f"🎬 <b>{movie['nomi']}</b>\n\n"
         f"🔢 <b>Kod:</b> <code>{movie['kino_kodi']}</code>\n"
         f"🎭 <b>Janr:</b> {movie['janri']}\n"
         f"📺 <b>Sifat:</b> {movie['sifat']}\n\n"
         f"🔒 <i>Ushbu video himoyalangan (uzatish cheklangan).</i>"
+        f"{admin_link}"
     )
     try:
         await call.message.answer_video(video=movie["video_file_id"], caption=caption, protect_content=True)
@@ -939,6 +954,36 @@ async def cb_admin_stats(call: CallbackQuery) -> None:
         f"👥 Foydalanuvchilar: <b>{users_count}</b> ta"
     )
     await call.message.edit_text(text, reply_markup=back_to_admin_kb())
+
+
+@dp.callback_query(F.data == "admin_all_links", IsAdmin())
+async def cb_admin_all_links(call: CallbackQuery) -> None:
+    movies = await db.get_all_movies()
+    series = await db.get_all_series()
+
+    text = (
+        "🔗 <b>Kanal uchun to'g'ridan-to'g'ri havolalar (@PostBot uchun):</b>\n\n"
+        "<i>💡 Ushbu havolalarni nusxalab (@PostBot orqali) kanalingizdagi post tugmasiga qo'ysangiz, "
+        "odamlar bitta bosishda videoni oladi (faqat homiy kanalga obuna bo'lganlar).</i>\n\n"
+    )
+
+    if movies:
+        text += "🎬 <b>Kinolar va 1 qismli multfilmlar:</b>\n"
+        for m in movies:
+            link = f"https://t.me/{BOT_USERNAME}?start=kino_{m['kino_kodi']}"
+            text += f"• <b>{m['nomi']}</b> (Kod: <code>{m['kino_kodi']}</code>)\n  👉 <code>{link}</code>\n"
+        text += "\n"
+
+    if series:
+        text += "📺 <b>Seriallar va Animelar (Barcha qismlar):</b>\n"
+        for s in series:
+            link = f"https://t.me/{BOT_USERNAME}?start=ser_{s['code']}"
+            text += f"• <b>{s['title']}</b> (Kod: <code>{s['code']}</code>)\n  👉 <code>{link}</code>\n"
+
+    builder = InlineKeyboardBuilder()
+    builder.row(InlineKeyboardButton(text="◀️ Admin Panel", callback_data="admin_panel"))
+
+    await call.message.edit_text(text, reply_markup=builder.as_markup())
 
 
 # ─────────────────────── ADMIN: MAJBURIY OBUNA (KANALLAR) ───────────────────────
@@ -1907,8 +1952,12 @@ async def fsm_movie_confirm(call: CallbackQuery, state: FSMContext) -> None:
         video_file_id=data["video_file_id"],
     )
     if ok:
+        deep_link = f"https://t.me/{BOT_USERNAME}?start=kino_{data['kino_kodi']}"
         await call.message.edit_text(
-            f"✅ <b>{data['nomi']}</b> muvaffaqiyatli saqlandi! (Kod: <code>{data['kino_kodi']}</code>)",
+            f"✅ <b>{data['nomi']}</b> muvaffaqiyatli saqlandi! (Kod: <code>{data['kino_kodi']}</code>)\n\n"
+            f"🔗 <b>Kanal uchun havola (@PostBot uchun):</b>\n"
+            f"<code>{deep_link}</code>\n\n"
+            f"<i>💡 Buni kanaldagi post ostidagi tugmaga havola qilib qo'ysangiz, odamlar bitta bosishda shu kinoni oladi (faqat homiy kanalga obuna bo'lgandagina)!</i>",
             reply_markup=back_to_admin_kb(),
         )
     else:
