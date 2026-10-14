@@ -2,6 +2,7 @@ import os
 import sys
 import logging
 import asyncio
+import time
 from aiohttp import web
 
 from dotenv import load_dotenv
@@ -149,12 +150,38 @@ class IsAdmin(Filter):
 
 # ─────────────────────── MAJBURIY OBUNANI TEKSHIRISH ───────────────────────
 
-async def check_user_subscriptions(user_id: int) -> list[dict]:
-    """Foydalanuvchi obuna bo'lmagan kanallar ro'yxatini qaytaradi."""
+# Tezkor kesh: har bir foydalanuvchi obunasini 3 daqiqa xotirada saqlaydi (tezkor javob berish uchun)
+_sub_cache: dict[int, float] = {}
+_channels_cache: list[dict] | None = None
+_channels_cache_expire: float = 0.0
+
+
+def invalidate_channels_cache() -> None:
+    global _channels_cache, _channels_cache_expire
+    _channels_cache = None
+    _channels_cache_expire = 0.0
+
+
+async def get_cached_channels() -> list[dict]:
+    global _channels_cache, _channels_cache_expire
+    now = time.time()
+    if _channels_cache is None or now > _channels_cache_expire:
+        _channels_cache = await db.get_all_channels()
+        _channels_cache_expire = now + 120.0  # 2 daqiqa kesh
+    return _channels_cache
+
+
+async def check_user_subscriptions(user_id: int, force: bool = False) -> list[dict]:
+    """Foydalanuvchi obuna bo'lmagan kanallar ro'yxatini qaytaradi (tezkor kesh bilan)."""
     if user_id in ADMIN_IDS:
         return []
 
-    channels = await db.get_all_channels()
+    now = time.time()
+    # Agar yaqindagina obuna tasdiqlangan bo'lsa, Telegram API ga ortiqcha so'rov yubormasdan tez javob beramiz
+    if not force and user_id in _sub_cache and now < _sub_cache[user_id]:
+        return []
+
+    channels = await get_cached_channels()
     if not channels:
         return []
 
@@ -167,8 +194,12 @@ async def check_user_subscriptions(user_id: int) -> list[dict]:
                 unsubscribed.append(ch)
         except Exception as e:
             logger.warning(f"Kanal obunasini tekshirishda ogohlantirish ({ch_id}): {e}")
-            # Agar bot kanalda admin bo'lmasa yoki xato bersa, bot to'xtab qolmasligi uchun o'tkazib yuboramiz
             pass
+
+    if not unsubscribed:
+        _sub_cache[user_id] = now + 180.0  # 3 daqiqa obunani eslab qoladi
+    else:
+        _sub_cache.pop(user_id, None)
 
     return unsubscribed
 
@@ -477,7 +508,8 @@ async def deliver_payload(target: Message, payload: str) -> bool:
 async def cmd_start(message: Message, command: CommandObject, state: FSMContext) -> None:
     await state.clear()
     user = message.from_user
-    await db.add_or_update_user(user.id, user.full_name, user.username)
+    # Fon rejimida foydalanuvchini bazaga kiritish (javob qaytish tezligini oshirish uchun)
+    asyncio.create_task(db.add_or_update_user(user.id, user.full_name, user.username))
     is_admin = user.id in ADMIN_IDS
 
     payload = (command.args or "").strip()
@@ -512,7 +544,7 @@ async def cmd_start(message: Message, command: CommandObject, state: FSMContext)
 async def cb_check_sub(call: CallbackQuery, state: FSMContext) -> None:
     user = call.from_user
     is_admin = user.id in ADMIN_IDS
-    unsubscribed = await check_user_subscriptions(user.id)
+    unsubscribed = await check_user_subscriptions(user.id, force=True)
     if unsubscribed:
         await call.answer("❌ Hali kanalga obuna bo'lmadingiz! Iltimos, obuna bo'ling.", show_alert=True)
         try:
@@ -1019,6 +1051,7 @@ async def cb_delete_channel(call: CallbackQuery) -> None:
     target = next((c for c in channels if c["id"] == ch_id), None)
     if target:
         await db.delete_channel(target["channel_id"])
+        invalidate_channels_cache()
         await call.answer(f"✅ {target['channel_name']} kanali o'chirildi!", show_alert=True)
     await cb_admin_channels(call)
 
@@ -1089,6 +1122,7 @@ async def fsm_channel_url(message: Message, state: FSMContext) -> None:
     name = data["channel_name"]
 
     success = await db.add_channel(channel_id=ch_id, channel_name=name, channel_url=url)
+    invalidate_channels_cache()
     await state.clear()
 
     if success:
