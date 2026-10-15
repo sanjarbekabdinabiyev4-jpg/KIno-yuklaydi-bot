@@ -9,6 +9,7 @@ from dotenv import load_dotenv
 from aiogram import Bot, Dispatcher, F
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import CommandStart, Command, Filter, StateFilter, CommandObject
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
@@ -190,8 +191,14 @@ async def check_user_subscriptions(user_id: int, force: bool = False) -> list[di
         ch_id = ch["channel_id"]
         try:
             member = await bot.get_chat_member(chat_id=ch_id, user_id=user_id)
-            if member.status in ("left", "kicked"):
+            if member.status not in ("creator", "administrator", "member"):
                 unsubscribed.append(ch)
+        except TelegramBadRequest as e:
+            err = str(e).lower()
+            if "member not found" in err or "participant_id_invalid" in err or "user not found" in err:
+                unsubscribed.append(ch)
+            else:
+                logger.warning(f"Kanal obunasini tekshirishda ogohlantirish ({ch_id}): {e}")
         except Exception as e:
             logger.warning(f"Kanal obunasini tekshirishda ogohlantirish ({ch_id}): {e}")
             pass
