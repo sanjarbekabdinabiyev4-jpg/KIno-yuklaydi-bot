@@ -141,6 +141,11 @@ class AddChannelStates(StatesGroup):
     waiting_channel_url  = State()  # Kanal linki
 
 
+class BroadcastStates(StatesGroup):
+    waiting_message = State()
+    confirm         = State()
+
+
 # ─────────────────────── ADMIN FILTRI ───────────────────────
 
 class IsAdmin(Filter):
@@ -260,6 +265,7 @@ def admin_panel_kb() -> InlineKeyboardMarkup:
         InlineKeyboardButton(text="📢 Majburiy obuna (Kanallar)", callback_data="admin_channels"),
     )
     builder.row(
+        InlineKeyboardButton(text="✉️ Xabar tarqatish (Hammaga)", callback_data="admin_broadcast"),
         InlineKeyboardButton(text="🔗 Kanal havolalari (Linklar)", callback_data="admin_all_links"),
     )
     builder.row(
@@ -1023,6 +1029,82 @@ async def cb_admin_all_links(call: CallbackQuery) -> None:
     builder.row(InlineKeyboardButton(text="◀️ Admin Panel", callback_data="admin_panel"))
 
     await call.message.edit_text(text, reply_markup=builder.as_markup())
+
+
+# ─────────────────────── ADMIN: XABAR TARQATISH (BROADCAST) ───────────────────────
+
+@dp.callback_query(F.data == "admin_broadcast", IsAdmin())
+async def cb_admin_broadcast_start(call: CallbackQuery, state: FSMContext) -> None:
+    users_count = await db.get_users_count()
+    await state.set_state(BroadcastStates.waiting_message)
+
+    builder = InlineKeyboardBuilder()
+    builder.row(InlineKeyboardButton(text="❌ Bekor qilish", callback_data="cancel_action"))
+
+    await call.message.edit_text(
+        f"✉️ <b>Barcha foydalanuvchilarga xabar tarqatish</b>\n\n"
+        f"👥 Hozirda bazada jami: <b>{users_count} ta</b> foydalanuvchi bor.\n\n"
+        f"Barcha foydalanuvchilarga yubormoqchi bo'lgan xabaringizni yuboring.\n"
+        f"<i>💡 Bu oddiy matn, rasm, video, audio yoki kanaldan forward qilingan post bo'lishi mumkin!</i>\n\n"
+        f"<i>Bekor qilish uchun /cancel yozing</i>",
+        reply_markup=builder.as_markup(),
+    )
+
+
+@dp.message(BroadcastStates.waiting_message, IsAdmin())
+async def fsm_broadcast_message(message: Message, state: FSMContext) -> None:
+    users_count = await db.get_users_count()
+    await state.update_data(
+        broadcast_chat_id=message.chat.id,
+        broadcast_message_id=message.message_id,
+    )
+    await state.set_state(BroadcastStates.confirm)
+
+    builder = InlineKeyboardBuilder()
+    builder.row(InlineKeyboardButton(text="🚀 Ha, hammaga yuborilsin!", callback_data="confirm_broadcast"))
+    builder.row(InlineKeyboardButton(text="❌ Bekor qilish", callback_data="cancel_action"))
+
+    await message.reply(
+        f"📢 <b>Ushbu xabarni barcha foydalanuvchilarga ({users_count} ta) yuborishni tasdiqlaysizmi?</b>\n\n"
+        f"Yuqoridagi xabaringiz barcha foydalanuvchilarga o'z holicha yetkaziladi.",
+        reply_markup=builder.as_markup(),
+    )
+
+
+@dp.callback_query(BroadcastStates.confirm, F.data == "confirm_broadcast", IsAdmin())
+async def cb_confirm_broadcast(call: CallbackQuery, state: FSMContext) -> None:
+    data = await state.get_data()
+    chat_id = data.get("broadcast_chat_id")
+    message_id = data.get("broadcast_message_id")
+    await state.clear()
+
+    if not chat_id or not message_id:
+        await call.message.edit_text("❌ Xabar ma'lumoti topilmadi!", reply_markup=back_to_admin_kb())
+        return
+
+    user_ids = await db.get_all_user_ids()
+    total = len(user_ids)
+
+    await call.message.edit_text(f"⏳ <b>Xabar yuborilmoqda...</b>\n\nJami: {total} ta foydalanuvchi.")
+
+    sent = 0
+    blocked = 0
+
+    for uid in user_ids:
+        try:
+            await bot.copy_message(chat_id=uid, from_chat_id=chat_id, message_id=message_id)
+            sent += 1
+            await asyncio.sleep(0.04)  # Telegram limitiga tushmaslik uchun (25 msg/s)
+        except Exception:
+            blocked += 1
+
+    await call.message.answer(
+        f"🎉 <b>Xabar tarqatish muvaffaqiyatli yakunlandi!</b>\n\n"
+        f"✅ Yetkazildi: <b>{sent} ta</b>\n"
+        f"❌ Yetib bormadi (botni bloklagan): <b>{blocked} ta</b>\n"
+        f"👥 Jami foydalanuvchilar: <b>{total} ta</b>",
+        reply_markup=back_to_admin_kb(),
+    )
 
 
 # ─────────────────────── ADMIN: MAJBURIY OBUNA (KANALLAR) ───────────────────────
