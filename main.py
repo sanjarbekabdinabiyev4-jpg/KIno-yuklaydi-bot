@@ -30,10 +30,13 @@ import database as db
 load_dotenv()
 
 BOT_TOKEN = os.getenv("BOT_TOKEN", "")
-_admin_raw = os.getenv("ADMIN_IDS", "")
-ADMIN_IDS = [int(x.strip()) for x in _admin_raw.split(",") if x.strip().isdigit()]
 BOT_NAME = os.getenv("BOT_NAME", "Kino & Serial Bot")
 BOT_USERNAME = os.getenv("BOT_USERNAME", "Kinodownloaderbot").replace("@", "").strip()
+
+# Bot egasining Telegram ID raqami (Sanjarbek - @abdinabiyev_0_9)
+# Faqatgina ushbu yagona foydalanuvchi to'liq admin huquqiga ega bo'ladi
+OWNER_ID = 6639882356
+ADMIN_IDS = [OWNER_ID]
 
 if not BOT_TOKEN:
     raise ValueError("❌ BOT_TOKEN .env faylida ko'rsatilmagan!")
@@ -978,12 +981,30 @@ async def cb_get_movie(call: CallbackQuery) -> None:
 
 # ─────────────────────── ADMIN PANEL VA STATISTIKA ───────────────────────
 
+@dp.message(Command("admin"), IsAdmin())
+async def cmd_admin(message: Message) -> None:
+    await message.answer(
+        "⚙️ <b>Admin Panel</b>\n\nKerakli amaliyotni tanlang 👇",
+        reply_markup=admin_panel_kb(),
+    )
+
+
+@dp.message(Command("admin"))
+async def cmd_admin_denied(message: Message) -> None:
+    await message.answer("❌ Ushbu buyruq faqat bot administratori uchun!")
+
+
 @dp.callback_query(F.data == "admin_panel", IsAdmin())
 async def cb_admin_panel(call: CallbackQuery) -> None:
     await call.message.edit_text(
         "⚙️ <b>Admin Panel</b>\n\nKerakli amaliyotni tanlang 👇",
         reply_markup=admin_panel_kb(),
     )
+
+
+@dp.callback_query(F.data == "admin_panel")
+async def cb_admin_panel_denied(call: CallbackQuery) -> None:
+    await call.answer("❌ Ushbu bo'lim faqat bot administratori uchun!", show_alert=True)
 
 
 @dp.callback_query(F.data == "admin_stats", IsAdmin())
@@ -2085,6 +2106,12 @@ async def fsm_movie_confirm(call: CallbackQuery, state: FSMContext) -> None:
         )
     else:
         await call.message.edit_text("❌ Bu kodli kino allaqachon mavjud!", reply_markup=back_to_admin_kb())
+
+
+@dp.callback_query(F.data.startswith("admin_"))
+async def cb_admin_actions_denied(call: CallbackQuery) -> None:
+    if call.from_user.id not in ADMIN_IDS:
+        await call.answer("❌ Ruxsat berilmagan! Faqat bot administratori uchun.", show_alert=True)
 
 
 @dp.callback_query(F.data == "cancel_action")
