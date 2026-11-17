@@ -8,8 +8,8 @@ load_dotenv()
 
 logger = logging.getLogger(__name__)
 
-TURSO_DATABASE_URL = os.getenv("TURSO_DATABASE_URL", "").strip()
-TURSO_AUTH_TOKEN = os.getenv("TURSO_AUTH_TOKEN", "").strip()
+TURSO_DATABASE_URL = os.getenv("TURSO_DATABASE_URL", "").strip() or "https://kino-bot-sanjarbekabdinabiyev4-jpg.aws-eu-west-1.turso.io"
+TURSO_AUTH_TOKEN = os.getenv("TURSO_AUTH_TOKEN", "").strip() or "eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCJ9.eyJhIjoicnciLCJpYXQiOjE3OTA4NjY4NTAsImlkIjoiMDFhMGY3ZjktYTEwMS03YTgwLTliOTctNjc3YmZjNzAwYTc5Iiwia2lkIjoiX3J0OGNPeFE3czhuLU5COE9sZlVod3kyeTFDVjZYZDF1aUZYWDEwajdVSSIsInJpZCI6Ijg5NGFkMWUxLWNhOGQtNGVmYy1iMDQ4LTJjZTYwNTUyNDAzYSJ9.xOuZcvzeFaX7eSs7jRUBVed9bHT8Qyr3IHZMgI0WriNhCSpPFqOG7mMmcxTm353hrbBgGHARTVxBhddX02pbDA"
 
 # libsql:// protokolini https:// ga o'tkazish (HTTP ulanish barqaror bo'lishi uchun)
 if TURSO_DATABASE_URL.startswith("libsql://"):

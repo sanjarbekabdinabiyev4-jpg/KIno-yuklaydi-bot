@@ -29,7 +29,7 @@ import database as db
 
 load_dotenv()
 
-BOT_TOKEN = os.getenv("BOT_TOKEN", "")
+BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip() or "8840237336:AAFPK3HUNi6nv4ITMWobtvL5Mcc8Fi0NvUk"
 BOT_NAME = os.getenv("BOT_NAME", "Kino & Serial Bot")
 BOT_USERNAME = os.getenv("BOT_USERNAME", "Kinodownloaderbot").replace("@", "").strip()
 
