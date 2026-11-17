@@ -212,7 +212,7 @@ async def check_user_subscriptions(user_id: int, force: bool = False) -> list[di
             pass
 
     if not unsubscribed:
-        _sub_cache[user_id] = now + 180.0  # 3 daqiqa obunani eslab qoladi
+        _sub_cache[user_id] = now + 1800.0  # 30 daqiqa obunani eslab qoladi
     else:
         _sub_cache.pop(user_id, None)
 
@@ -613,6 +613,7 @@ async def cmd_myid(message: Message) -> None:
 
 @dp.callback_query(F.data == "main_menu")
 async def cb_main_menu(call: CallbackQuery, state: FSMContext) -> None:
+    await call.answer()
     await state.clear()
     is_admin = call.from_user.id in ADMIN_IDS
     text = f"🎬 <b>{BOT_NAME}</b>\n\nQuyidagi tugmalardan birini tanlang 👇"
@@ -626,6 +627,7 @@ async def cb_main_menu(call: CallbackQuery, state: FSMContext) -> None:
 
 @dp.callback_query(F.data == "search_by_code")
 async def cb_search_by_code(call: CallbackQuery, state: FSMContext) -> None:
+    await call.answer()
     await state.clear()
     await call.message.edit_text(
         "🔢 <b>Kod bo'yicha qidiruv</b>\n\n"
@@ -637,6 +639,7 @@ async def cb_search_by_code(call: CallbackQuery, state: FSMContext) -> None:
 
 @dp.callback_query(F.data == "search_by_name")
 async def cb_search_by_name(call: CallbackQuery, state: FSMContext) -> None:
+    await call.answer()
     await state.set_state(SearchStates.waiting_query)
     await call.message.edit_text(
         "🔍 <b>Nom bo'yicha qidiruv</b>\n\n"
@@ -671,6 +674,7 @@ async def handle_search_query(message: Message, state: FSMContext) -> None:
 
 @dp.callback_query(F.data == "all_movies")
 async def cb_all_movies(call: CallbackQuery) -> None:
+    await call.answer()
     movies = await db.get_all_movies()
     if not movies:
         await call.message.edit_text("📭 Bazada hali kino yo'q.", reply_markup=back_to_menu_kb())
@@ -689,6 +693,7 @@ async def cb_all_movies(call: CallbackQuery) -> None:
 
 @dp.callback_query(F.data == "all_series")
 async def cb_all_series(call: CallbackQuery) -> None:
+    await call.answer()
     series_list = await db.get_all_series()
     if not series_list:
         await call.message.edit_text("📭 Bazada hali serial yo'q.", reply_markup=back_to_menu_kb())
@@ -707,6 +712,7 @@ async def cb_all_series(call: CallbackQuery) -> None:
 
 @dp.callback_query(F.data == "all_cartoons")
 async def cb_all_cartoons(call: CallbackQuery) -> None:
+    await call.answer()
     user = call.from_user
     unsubscribed = await check_user_subscriptions(user.id)
     if unsubscribed:
@@ -2149,6 +2155,13 @@ async def start_web_server() -> None:
 async def main() -> None:
     await db.create_tables()
     logger.info("Malumotlar bazasi tayyor.")
+
+    # Kinolar va seriallarni operativ xotiraga yuklash (0.001s da tezkor javob qaytarish uchun)
+    try:
+        if hasattr(db, "preload_cache") and db.preload_cache:
+            await db.preload_cache()
+    except Exception as e:
+        logger.warning(f"Keshni yuklashda ogohlantirish: {e}")
 
     # Render Web Service uchun port ochish
     try:

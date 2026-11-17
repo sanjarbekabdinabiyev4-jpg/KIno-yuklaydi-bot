@@ -24,6 +24,27 @@ DB_NAME = os.getenv("DB_NAME", _default_db)
 
 _turso_client = None
 
+# ─────────────────────── TEZKOR IN-MEMORY KESH ───────────────────────
+_movies_cache: dict[int, dict] = {}
+_series_cache: dict[int, dict] = {}
+_channels_cache: list[dict] | None = None
+_cache_ready: bool = False
+
+
+async def preload_cache() -> None:
+    """Server ishga tushganda barcha kinolar va seriallarni operativ xotiraga yuklaydi."""
+    global _movies_cache, _series_cache, _channels_cache, _cache_ready
+    try:
+        movies = await fetchall("SELECT * FROM movies")
+        _movies_cache = {m["kino_kodi"]: m for m in movies}
+        series = await fetchall("SELECT * FROM series")
+        _series_cache = {s["code"]: s for s in series}
+        _channels_cache = await fetchall("SELECT * FROM channels")
+        _cache_ready = True
+        logger.info(f"⚡ Tezkor kesh tayyor: {len(_movies_cache)} ta kino, {len(_series_cache)} ta serial yuklandi")
+    except Exception as e:
+        logger.warning(f"Keshni yuklashda ogohlantirish: {e}")
+
 async def get_turso_client():
     global _turso_client
     if _turso_client is None:
@@ -219,6 +240,13 @@ async def add_series(code: int, title: str, genre: str = "Janrsiz", poster_file_
             "INSERT INTO series (code, title, genre, poster_file_id) VALUES (?, ?, ?, ?)",
             (code, title, genre, poster_file_id),
         )
+        if _cache_ready:
+            _series_cache[code] = {
+                "code": code,
+                "title": title,
+                "genre": genre,
+                "poster_file_id": poster_file_id,
+            }
         return True
     except Exception as e:
         logger.warning(f"add_series xatolik: {e}")
@@ -232,6 +260,8 @@ async def update_series_poster(code: int, poster_file_id: str) -> bool:
             "UPDATE series SET poster_file_id = ? WHERE code = ?",
             (poster_file_id, code),
         )
+        if _cache_ready and code in _series_cache:
+            _series_cache[code]["poster_file_id"] = poster_file_id
         return True
     except Exception as e:
         logger.warning(f"update_series_poster xatolik: {e}")
@@ -240,16 +270,25 @@ async def update_series_poster(code: int, poster_file_id: str) -> bool:
 
 async def get_series_by_code(code: int) -> dict | None:
     """Serial kodi bo'yicha serial ma'lumotlarini qaytaradi."""
-    return await fetchone("SELECT * FROM series WHERE code = ?", (code,))
+    if _cache_ready and code in _series_cache:
+        return _series_cache[code]
+    s = await fetchone("SELECT * FROM series WHERE code = ?", (code,))
+    if s and _cache_ready:
+        _series_cache[code] = s
+    return s
 
 
 async def get_all_series() -> list[dict]:
     """Barcha seriallar ro'yxatini qaytaradi."""
+    if _cache_ready:
+        return sorted(_series_cache.values(), key=lambda s: s["code"])
     return await fetchall("SELECT * FROM series ORDER BY code")
 
 
 async def get_series_count() -> int:
     """Seriallar sonini qaytaradi."""
+    if _cache_ready:
+        return len(_series_cache)
     val = await fetchval("SELECT COUNT(*) FROM series")
     return int(val or 0)
 
@@ -259,6 +298,8 @@ async def delete_series(code: int) -> bool:
     try:
         await execute("DELETE FROM series_episodes WHERE series_code = ?", (code,))
         await execute("DELETE FROM series WHERE code = ?", (code,))
+        if _cache_ready:
+            _series_cache.pop(code, None)
         return True
     except Exception as e:
         logger.warning(f"delete_series xatolik: {e}")
@@ -350,6 +391,15 @@ async def add_movie(
             """,
             (kino_kodi, nomi, janri, tili, sifat, video_file_id),
         )
+        if _cache_ready:
+            _movies_cache[kino_kodi] = {
+                "kino_kodi": kino_kodi,
+                "nomi": nomi,
+                "janri": janri,
+                "tili": tili,
+                "sifat": sifat,
+                "video_file_id": video_file_id,
+            }
         return True
     except Exception as e:
         logger.warning(f"add_movie xatolik: {e}")
@@ -358,11 +408,20 @@ async def add_movie(
 
 async def get_movie_by_code(kino_kodi: int) -> dict | None:
     """Kod bo'yicha kino ma'lumotlarini qaytaradi."""
-    return await fetchone("SELECT * FROM movies WHERE kino_kodi = ?", (kino_kodi,))
+    if _cache_ready and kino_kodi in _movies_cache:
+        return _movies_cache[kino_kodi]
+    movie = await fetchone("SELECT * FROM movies WHERE kino_kodi = ?", (kino_kodi,))
+    if movie and _cache_ready:
+        _movies_cache[kino_kodi] = movie
+    return movie
 
 
 async def search_movies_by_name(query: str) -> list[dict]:
     """Nom bo'yicha qidiruv (kinolar bo'yicha)."""
+    if _cache_ready:
+        q = query.lower()
+        res = [m for m in _movies_cache.values() if q in m["nomi"].lower()]
+        return sorted(res, key=lambda m: m["kino_kodi"])[:15]
     return await fetchall(
         "SELECT * FROM movies WHERE nomi LIKE ? ORDER BY kino_kodi LIMIT 15",
         (f"%{query}%",),
@@ -371,11 +430,20 @@ async def search_movies_by_name(query: str) -> list[dict]:
 
 async def get_all_movies() -> list[dict]:
     """Barcha kinolar ro'yxati."""
+    if _cache_ready:
+        return sorted(_movies_cache.values(), key=lambda m: m["kino_kodi"])
     return await fetchall("SELECT * FROM movies ORDER BY kino_kodi")
 
 
 async def get_all_cartoons() -> dict:
     """Barcha multfilmlarni (kinolar va seriallar/animelar) qaytaradi."""
+    if _cache_ready:
+        cartoons_movies = [m for m in _movies_cache.values() if 'mult' in m["janri"].lower() or 'anim' in m["janri"].lower()]
+        cartoons_series = [s for s in _series_cache.values() if 'mult' in s["genre"].lower() or 'anim' in s["genre"].lower()]
+        return {
+            "movies": sorted(cartoons_movies, key=lambda m: m["kino_kodi"], reverse=True),
+            "series": sorted(cartoons_series, key=lambda s: s["code"], reverse=True),
+        }
     movies = await fetchall(
         "SELECT * FROM movies WHERE LOWER(janri) LIKE '%mult%' OR LOWER(janri) LIKE '%anim%' ORDER BY kino_kodi DESC"
     )
@@ -389,6 +457,8 @@ async def delete_movie(kino_kodi: int) -> bool:
     """Kino kodiga ko'ra kinoni o'chiradi."""
     try:
         await execute("DELETE FROM movies WHERE kino_kodi = ?", (kino_kodi,))
+        if _cache_ready:
+            _movies_cache.pop(kino_kodi, None)
         return True
     except Exception as e:
         logger.warning(f"delete_movie xatolik: {e}")
@@ -397,6 +467,8 @@ async def delete_movie(kino_kodi: int) -> bool:
 
 async def get_movies_count() -> int:
     """Kinolar sonini qaytaradi."""
+    if _cache_ready:
+        return len(_movies_cache)
     val = await fetchval("SELECT COUNT(*) FROM movies")
     return int(val or 0)
 
@@ -436,6 +508,7 @@ async def get_all_user_ids() -> list[int]:
 
 async def add_channel(channel_id: str, channel_name: str, channel_url: str) -> bool:
     """Yangi kanal qo'shadi yoki yangilaydi."""
+    global _channels_cache
     try:
         await execute(
             """
@@ -447,6 +520,7 @@ async def add_channel(channel_id: str, channel_name: str, channel_url: str) -> b
             """,
             (channel_id, channel_name, channel_url),
         )
+        _channels_cache = None
         return True
     except Exception as e:
         logger.warning(f"add_channel xatolik: {e}")
@@ -454,14 +528,20 @@ async def add_channel(channel_id: str, channel_name: str, channel_url: str) -> b
 
 
 async def get_all_channels() -> list[dict]:
-    """Barcha majburiy obuna kanallarini qaytaradi."""
-    return await fetchall("SELECT * FROM channels ORDER BY id ASC")
+    """Barcha majburiy obuna kanallarini qaytaradi (keshlangan)."""
+    global _channels_cache
+    if _channels_cache is not None:
+        return _channels_cache
+    _channels_cache = await fetchall("SELECT * FROM channels ORDER BY id ASC")
+    return _channels_cache
 
 
 async def delete_channel(channel_id: str) -> bool:
     """Kanalni ro'yxatdan o'chiradi."""
+    global _channels_cache
     try:
         await execute("DELETE FROM channels WHERE channel_id = ?", (channel_id,))
+        _channels_cache = None
         return True
     except Exception as e:
         logger.warning(f"delete_channel xatolik: {e}")

@@ -7,6 +7,7 @@ _spec = importlib.util.spec_from_file_location("root_db_module", str(_db_py_path
 _mod = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(_mod)
 
+preload_cache = getattr(_mod, "preload_cache", None)
 create_tables = _mod.create_tables
 add_movie = _mod.add_movie
 get_movie_by_code = _mod.get_movie_by_code
